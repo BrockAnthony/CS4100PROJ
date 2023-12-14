@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from PIL import Image
+from PIL import Image, ImageOps
 import os
 from torch.utils.data import random_split
 from sklearn.metrics import accuracy_score
@@ -17,6 +17,8 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.base import BaseEstimator
 from skorch import NeuralNetClassifier
 import urllib3
+import torch.nn.functional as F
+import argparse
 
 # Data Preprocessing
 def get_data_loaders(train_transforms, test_transforms, batch_size=64, num_workers=8):
@@ -56,7 +58,8 @@ class BrainTumorClassifier(nn.Module):
         # Pooling layer
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         #Calculate the size of the flattened output after conv and pooling layers
-        self.flattened_size = (64 // (2**3)) * (64 // (2**3)) * 128
+        #self.flattened_size = (64 // (2**3)) * (64 // (2**3)) * 128
+        self.flattened_size = 8192
         # Fully connected layers
         self.fc1 = nn.Linear(self.flattened_size, 512)
         self.fc2 = nn.Linear(512, 4)
@@ -182,6 +185,14 @@ def subset_testing(train_dataset, test_dataset):
 
         print(f'Finished Training for Fold {fold+1}')
 
+        # Save the trained model state
+        torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        }, 'subset_trained_model.pth')
+
 # Full Training / Validation
 def full_training_validation(train_dataset, test_dataset):
     k_folds = 5
@@ -252,7 +263,64 @@ def full_training_validation(train_dataset, test_dataset):
 
         print(f'Finished Training for Fold {fold+1}')
 
-# Main function
+
+
+def predict_sample(image_path, model_state):
+    """
+    Parameters: path to an image, and the saved model state
+    Returns: Prediction of cancer class from CNN classifier, and probabilities of other classes
+    """
+    # Load and preprocess the input image
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    image = Image.open(image_path)
+    image = ImageOps.fit(image, (64, 64), Image.ANTIALIAS)
+    image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+
+
+    # Instantiate the model
+    model = BrainTumorClassifier()
+
+    # Load the model state
+    checkpoint = torch.load(model_state, map_location=torch.device('cpu'))
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Use the model to make predictions
+    model.eval()
+    with torch.no_grad():
+        output = model(image_tensor)
+
+    # Apply softmax to get probabilities
+    probabilities = F.softmax(output, dim=1)[0]
+
+    # Get the predicted class
+    _, predicted_class = torch.max(output, 1)
+
+    # Print prediction
+    if predicted_class.item() == 0:
+        print(predicted_class.item(),": Predicted glioma")
+    elif predicted_class.item() == 1:
+        print(predicted_class.item(),": Predicted meningionma")
+    elif predicted_class.item() == 2:
+        print(predicted_class.item(),": Predicted no tumor")
+    elif predicted_class.item() == 3:
+        print(predicted_class.item(),": Predicted pituitary")
+    
+    print("Probabilities of prediction:", probabilities.numpy())
+
+    # Plot image (for checking)
+    image_array = np.asarray(image)
+    plt.imshow(image_array)
+    plt.show()
+
+    return predicted_class.item(), probabilities.numpy()
+
+
+
 if __name__ == "__main__":
     # Train image normalization
     train_transforms = transforms.Compose([
@@ -273,11 +341,18 @@ if __name__ == "__main__":
 
     train_loader, test_loader = get_data_loaders(train_transforms, test_transforms)
 
-    grid_search(train_loader)
+    #grid_search(train_loader)
 
     train_dataset = datasets.ImageFolder(root='archive/Training', transform=train_transforms)
     test_dataset = datasets.ImageFolder(root='archive/Testing', transform=test_transforms)
-    subset_testing(train_dataset, test_dataset)
-
+    # Train the model
+    #subset_testing(train_dataset, test_dataset)
 
     #full_training_validation(train_dataset, test_dataset)
+
+    # Command line functionality
+    
+
+    # Use the saved trained model state to classify the provided sample
+    predict_sample("sample_nt.jpg", "subset_trained_model.pth")
+    
