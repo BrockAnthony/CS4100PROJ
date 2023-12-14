@@ -21,7 +21,7 @@ import torch.nn.functional as F
 import argparse
 
 # Data Preprocessing
-def get_data_loaders(train_transforms, test_transforms, batch_size=64, num_workers=8):
+def get_data_loaders(train_transforms, test_transforms, batch_size=64, num_workers=4):
     train_dataset = datasets.ImageFolder(root='archive/Training', transform=train_transforms)
     test_dataset = datasets.ImageFolder(root='archive/Testing', transform=test_transforms)
 
@@ -52,7 +52,7 @@ class BrainTumorClassifier(nn.Module):
     def __init__(self):
         super(BrainTumorClassifier, self).__init__()
         # Convolutional layers
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
         # Pooling layer
@@ -264,58 +264,74 @@ def full_training_validation(train_dataset, test_dataset):
         print(f'Finished Training for Fold {fold+1}')
 
 
+        # Save the trained model state
+        torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        }, 'full_trained_model.pth')
 
-def predict_sample(image_path, model_state):
+
+
+def predict_sample_folder(folder_path, model_state_path):
     """
-    Parameters: path to an image, and the saved model state
-    Returns: Prediction of cancer class from CNN classifier, and probabilities of other classes
+    Parameters: path to a folder containing images, and the saved model state path
+    Returns: Model tumor prediction on image, and probabilities of other predictions
     """
-    # Load and preprocess the input image
-    transform = transforms.Compose([
-        transforms.Resize((64, 64)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    # Get a list of image files in the folder
+    image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
 
-    image = Image.open(image_path)
-    image = ImageOps.fit(image, (64, 64), Image.ANTIALIAS)
-    image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+    # Loop over each image in the folder
+    for image_file in image_files:
+        image_path = os.path.join(folder_path, image_file)
 
+        # Load and preprocess the input image
+        transform = transforms.Compose([
+            transforms.Resize((64, 64)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5], std=[0.5]),
+        ])
 
-    # Instantiate the model
-    model = BrainTumorClassifier()
+        # Open image and greyscale
+        image = Image.open(image_path).convert('L')
+        image = ImageOps.fit(image, (64, 64), Image.ANTIALIAS)
+        image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
 
-    # Load the model state
-    checkpoint = torch.load(model_state, map_location=torch.device('cpu'))
-    model.load_state_dict(checkpoint['model_state_dict'])
+        # Instantiate the model
+        model = BrainTumorClassifier()
 
-    # Use the model to make predictions
-    model.eval()
-    with torch.no_grad():
-        output = model(image_tensor)
+        # Load the model state
+        checkpoint = torch.load(model_state_path, map_location=torch.device('cpu'))
+        model.load_state_dict(checkpoint['model_state_dict'])
 
-    # Apply softmax to get probabilities
-    probabilities = F.softmax(output, dim=1)[0]
+        # Use the model to make predictions
+        model.eval()
+        with torch.no_grad():
+            output = model(image_tensor)
 
-    # Get the predicted class
-    _, predicted_class = torch.max(output, 1)
+        # Apply softmax to get probabilities
+        probabilities = F.softmax(output, dim=1)[0]
 
-    # Print prediction
-    if predicted_class.item() == 0:
-        print(predicted_class.item(),": Predicted glioma")
-    elif predicted_class.item() == 1:
-        print(predicted_class.item(),": Predicted meningionma")
-    elif predicted_class.item() == 2:
-        print(predicted_class.item(),": Predicted no tumor")
-    elif predicted_class.item() == 3:
-        print(predicted_class.item(),": Predicted pituitary")
-    
-    print("Probabilities of prediction:", probabilities.numpy())
+        # Get the predicted class
+        _, predicted_class = torch.max(output, 1)
 
-    # Plot image (for checking)
-    image_array = np.asarray(image)
-    plt.imshow(image_array)
-    plt.show()
+        # Print prediction
+        if predicted_class.item() == 0:
+            print(predicted_class.item(),": Predicted glioma")
+        elif predicted_class.item() == 1:
+            print(predicted_class.item(),": Predicted meningionma")
+        elif predicted_class.item() == 2:
+            print(predicted_class.item(),": Predicted no tumor")
+        elif predicted_class.item() == 3:
+            print(predicted_class.item(),": Predicted pituitary")
+        
+        print("Probabilities of prediction:", probabilities.numpy())
+
+        # Plot image (for checking)
+        #image_array = np.asarray(image)
+        #plt.imshow(image_array)
+        #plt.show()
 
     return predicted_class.item(), probabilities.numpy()
 
@@ -329,14 +345,17 @@ if __name__ == "__main__":
         transforms.RandomRotation(10),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.Grayscale(num_output_channels=1),  # Convert to greyscale
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485], std=[0.229]),
     ])
+
     # Test image normalization
     test_transforms = transforms.Compose([
         transforms.Resize((64, 64)),
+        transforms.Grayscale(num_output_channels=1),  # Convert to greyscale
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485], std=[0.229]),
     ])
 
     train_loader, test_loader = get_data_loaders(train_transforms, test_transforms)
@@ -346,13 +365,13 @@ if __name__ == "__main__":
     train_dataset = datasets.ImageFolder(root='archive/Training', transform=train_transforms)
     test_dataset = datasets.ImageFolder(root='archive/Testing', transform=test_transforms)
     # Train the model
-    #subset_testing(train_dataset, test_dataset)
+    subset_testing(train_dataset, test_dataset)
 
     #full_training_validation(train_dataset, test_dataset)
 
     # Command line functionality
-    
+    parser = argparse.ArgumentParser(description='Predict brain tumor categories for images in a folder.')
+    parser.add_argument('folder_path', type=str, help='Path to the folder containing images for classification.')
+    args = parser.parse_args()
 
-    # Use the saved trained model state to classify the provided sample
-    predict_sample("sample_nt.jpg", "subset_trained_model.pth")
-    
+    predict_sample_folder(args.folder_path, "subset_trained_model.pth")
