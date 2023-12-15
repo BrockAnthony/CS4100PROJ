@@ -1,4 +1,4 @@
-# Brain Tumor Classifier
+# CNNs for Brain Tumor Classification
 
 ## Overview
 
